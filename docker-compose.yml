@@ -1,0 +1,130 @@
+version: '3.8'
+
+# Hardening: Network isolation
+networks:
+  frontend_net:
+    driver: bridge
+  backend_net:
+    driver: bridge
+  monitor_net:
+    driver: bridge
+
+volumes:
+  db_data:
+  prometheus_data:
+  grafana_data:
+
+services:
+  # 1. Database
+  db:
+    image: mysql:8.0
+    container_name: club_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: StrongRootPassword123! # Hardening: Mật khẩu mạnh
+      MYSQL_DATABASE: club_db
+      MYSQL_USER: club_user
+      MYSQL_PASSWORD: StrongP@ssw0rd!
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - backend_net
+
+  # 2. Quản lý DB Tool
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: club_pma
+    restart: always
+    ports:
+      - "8080:80"
+    environment:
+      PMA_HOST: db
+      MYSQL_ROOT_PASSWORD: StrongRootPassword123!
+    networks:
+      - frontend_net
+      - backend_net
+    depends_on:
+      - db
+
+  # 3. Web App
+  app:
+    build: ./app
+    container_name: club_app
+    restart: always
+    environment:
+      DB_HOST: db
+      DB_USER: club_user
+      DB_PASSWORD: StrongP@ssw0rd!
+      DB_NAME: club_db
+    networks:
+      - frontend_net
+      - backend_net
+    depends_on:
+      - db
+
+  # 4. Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: club_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - frontend_net
+    depends_on:
+      - app
+
+  # 5. Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - "9090:9090"
+    networks:
+      - frontend_net # Cần để lấy metrics từ app
+      - monitor_net
+
+  # 6. Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: AdminStrongPass!@#
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - monitor_net
+    depends_on:
+      - prometheus
+
+  # 7. Loki
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - monitor_net
+
+  # 8. Promtail
+  promtail:
+    image: grafana/promtail:2.9.0
+    container_name: promtail
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # Cần để đọc log docker
+      - ./promtail/config.yml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - monitor_net
+    depends_on:
+      - loki
